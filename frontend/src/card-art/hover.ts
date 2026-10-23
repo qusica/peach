@@ -115,7 +115,11 @@ export function wireHover(el: HTMLElement, it: HoverItem): void {
       const video = document.createElement('video') as HoverVideo;
       v = video;
       video.className = 'hv'; video.muted = true; video.playsInline = true; video.loop = true; video.preload = 'metadata';
-      video.src = '/stream?id=' + it.id;
+      // Preview requests may read an already-compatible source, but may NOT
+      // trigger a whole-file FFmpeg encode or fill generated/transcodes.
+      const hevc = video.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"')
+        || video.canPlayType('video/mp4; codecs="hev1.1.6.L93.B0"');
+      video.src = '/stream?id=' + it.id + '&preview=1' + (hevc ? '&native_hevc=1' : '');
       // 分段跳跃：每段放 1.4 秒就跳到下一段，扫完全片，而不是从一个点连续播
       const SEG = [0.08, 0.22, 0.36, 0.50, 0.64, 0.78, 0.90]; let si = 0;
       const seek = () => { try { video.currentTime = (video.duration || 0) * (SEG[si] ?? 0); } catch { /* 元数据还没到 */ } };

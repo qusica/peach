@@ -66,3 +66,22 @@ def reveal_path(path: Path) -> bool:
         subprocess.Popen(["open", "-R", os.fspath(path)], close_fds=True)
         return True
     return False
+
+def open_media_path(path: Path) -> bool:
+    """Open a media file using the server desktop's default application.
+
+    This is a user-initiated desktop action, never a shell command. Headless
+    instances cannot open a player; the API must require a local browser.
+    """
+    if os.name == "nt":
+        os.startfile(os.fspath(path))  # type: ignore[attr-defined]
+        return True
+    if sys.platform == "darwin":
+        command = ["open", "--", os.fspath(path)]
+    elif os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+        command = ["xdg-open", os.fspath(path)]
+    else:
+        return False
+    subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, close_fds=True)
+    return True

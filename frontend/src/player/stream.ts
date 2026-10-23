@@ -10,9 +10,18 @@ export function newStreamSession(): string {
   return globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
+/** Browser support is a client capability, not a fixed server-side codec rule. */
+export function nativeHevcSupported(): boolean {
+  try {
+    const video = document.createElement('video');
+    return Boolean(video.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"')
+      || video.canPlayType('video/mp4; codecs="hev1.1.6.L93.B0"'));
+  } catch { return false }
+}
+
 export function directStreamSource(item: PlayerItem, session: string): PlayerSource {
   return {
-    src: `/stream?id=${item.id}&session=${encodeURIComponent(session)}`,
+    src: `/stream?id=${item.id}&session=${encodeURIComponent(session)}${nativeHevcSupported() ? "&native_hevc=1" : ""}`,
     type: String(item.name || '').toLowerCase().endsWith('.webm') ? 'video/webm' : 'video/mp4',
   };
 }
@@ -30,7 +39,7 @@ export async function playableStreamSource(item: PlayerItem, session: string): P
   const proxied = followStreamSource(item);
   if (proxied) return proxied;
   try {
-    const plan = await api(`/api/stream-plan?id=${item.id}&session=${encodeURIComponent(session)}`) as
+    const plan = await api(`/api/stream-plan?id=${item.id}&session=${encodeURIComponent(session)}${nativeHevcSupported() ? "&native_hevc=1" : ""}`) as
       { protocol?: string; src?: string; mime_type?: string } | null;
     if (plan?.src) return { src: plan.src, type: plan.mime_type || (plan.protocol === 'hls' ? 'application/vnd.apple.mpegurl' : 'video/mp4') };
   } catch { /* 取不到计划就直读 */ }

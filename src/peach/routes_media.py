@@ -132,7 +132,7 @@ def _repaired_header(state, asset_id: int, source: Path):
     return None if store is None else store.lookup(asset_id, source)
 
 
-def _needs_conversion(state, asset_id: int, source: Path, session: str) -> bool:
+def _needs_conversion(state, asset_id: int, source: Path, session: str, native_hevc: bool = False) -> bool:
     """起播时要不要转码。只有 `/api/stream-plan` 问这一句。
 
     缺 ctts 的片子只是时间戳错乱，重建一份头就能直接按 Range 播，不必重编码。头还没
@@ -142,7 +142,7 @@ def _needs_conversion(state, asset_id: int, source: Path, session: str) -> bool:
     会让固定 6 秒的计划换成按关键帧切的，剩下的分片索引全对不上。
     """
     if not state.transcode_service.requires_conversion(
-            source, session=session, registry=state.stream_sessions):
+            source, session=session, registry=state.stream_sessions, native_hevc=native_hevc):
         return False
     store = getattr(state, "header_repairs", None)
     if store is None or not state.transcode_service.decode_order_timestamps(
@@ -237,7 +237,8 @@ def external_playlist(request: Request, id: int, ticket: str, origin: str = ''):
 
 
 @router.api_route("/stream", methods=["GET", "HEAD"])
-def stream(request: Request, id: int, session: str = "", args: dict[str, str] = Depends(require_auth)):
+def stream(request: Request, id: int, session: str = "", native_hevc: int = 0,
+           preview: int = 0, args: dict[str, str] = Depends(require_auth)):
     state = request.app.state
     asset = state.media_engine.asset(id)
     path = state.media_engine.filesystem.file_for(asset, thumbnail=False)
@@ -251,9 +252,15 @@ def stream(request: Request, id: int, session: str = "", args: dict[str, str] = 
         return SplicedMp4Response(
             path, header, session=session, registry=state.stream_sessions,
         )
+    # Card hover must never create an entire-file transcoding cache.
+    if preview and state.transcode_service.requires_conversion(
+            path, session=session, registry=state.stream_sessions,
+            native_hevc=bool(native_hevc)):
+        return JSONResponse({"error": "preview requires transcoding"}, status_code=415)
     try:
         path, transcoded = state.transcode_service.browser_path(
             id, path, session=session, registry=state.stream_sessions,
+            native_hevc=bool(native_hevc),
         )
     except TranscodeCancelled:
         return Response(status_code=410, headers={"Cache-Control": "no-store"})
@@ -274,7 +281,8 @@ def stream(request: Request, id: int, session: str = "", args: dict[str, str] = 
 
 
 @router.get("/api/stream-plan")
-def stream_plan(request: Request, id: int, session: str = "", mode: str = "", args: dict[str, str] = Depends(require_auth)):
+def stream_plan(request: Request, id: int, session: str = "", mode: str = "",
+                native_hevc: int = 0, args: dict[str, str] = Depends(require_auth)):
     state = request.app.state
     if session and len(session) > 128:
         return JSONResponse({"error": "invalid session"}, status_code=400)
@@ -296,7 +304,7 @@ def stream_plan(request: Request, id: int, session: str = "", mode: str = "", ar
                 'src': f'/stream?id={id}&session={quote(session, safe="")}', 'reason': 'strm-pointer'}
     if source_path.suffix.lower() in strm.DISC_SUFFIXES:
         return JSONResponse({'error': 'ISO 原盘请使用作品详情中的外部播放器打开'}, status_code=415)
-    conversion = _needs_conversion(state, id, source_path, session)
+    conversion = _needs_conversion(state, id, source_path, session, native_hevc=bool(native_hevc))
     resolved = (_hls_plan(state, id, session, conversion)
                 if conversion or plan.protocol == "hls" else None)
     if resolved and session:
@@ -311,6 +319,8 @@ def stream_plan(request: Request, id: int, session: str = "", mode: str = "", ar
             "reason": plan.reason,
         }
     source = f"/stream?id={id}"
+    if native_hevc:
+        source += "&native_hevc=1"
     if session:
         source += f"&session={quote(session, safe='')}"
     return {
