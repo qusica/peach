@@ -72,14 +72,15 @@ class TranscodeService:
     def needs_transcode(source: Path) -> bool:
         return source.suffix.lower() not in BROWSER_NATIVE_SUFFIXES
 
-    def requires_conversion(self, source: Path, *, session: str = "", registry=None) -> bool:
+    def requires_conversion(self, source: Path, *, session: str = "", registry=None, native_hevc: bool = False) -> bool:
         """按容器和内部编码选择浏览器兼容路径，不生成整片缓存。"""
         if self.needs_transcode(source):
             return True
         if self.resolver.ffprobe() is None:
             return False
         profile = self._profile_for(source, session, registry)
-        return profile is None or not self._browser_compatible(source, profile)
+        return profile is None or not (self._browser_compatible(source, profile)
+                                       or (native_hevc and self._hevc_browser_compatible(source, profile)))
 
     def decode_order_timestamps(self, source: Path, *, session: str = "", registry=None) -> bool:
         """是不是只有时间戳错乱的那一类：有 B 帧却没有 ctts，码流本身浏览器解得出来。
@@ -121,6 +122,7 @@ class TranscodeService:
 
     def browser_path(
         self, asset_id: int, source: Path, *, session: str = "", registry=None,
+        native_hevc: bool = False,
     ) -> tuple[Path, bool]:
         profile = None
         if not self.needs_transcode(source):
@@ -130,7 +132,8 @@ class TranscodeService:
                 profile = self._profile_for(source, session, registry)
             except OSError as exc:
                 raise TranscodeUnavailable("source unavailable") from exc
-            if profile is not None and self._decodes_in_browser(source, profile):
+            if profile is not None and (self._decodes_in_browser(source, profile)
+                                        or (native_hevc and self._hevc_browser_compatible(source, profile))):
                 return source, False
 
         choice = self.resolver.ffmpeg()
@@ -208,6 +211,15 @@ class TranscodeService:
                     and profile.audio_codec in {"", "opus", "vorbis"})
         return (profile.video_codec == "theora"
                 and profile.audio_codec in {"", "vorbis", "opus"})
+
+    @staticmethod
+    def _hevc_browser_compatible(source: Path, profile: _MediaProfile) -> bool:
+        """Only pass HEVC MP4 through when the requesting browser advertises HEVC playback."""
+        return (source.suffix.lower() in {".mp4", ".m4v"}
+                and profile.video_codec in {"hevc", "h265"}
+                and profile.pixel_format in {"yuv420p", "yuv420p10le"}
+                and profile.audio_codec in {"", "aac", "mp3"}
+                and not profile.decode_order_timestamps)
 
     def _probe(
         self, source: Path, session: str, registry, deadline: float,

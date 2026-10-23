@@ -2935,6 +2935,23 @@ class FastApiContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(str(self.media_root), json.dumps(detail.json()),
                          "图片详情也只发安全元数据，真实路径留在服务端")
 
+    async def test_local_player_requires_local_browser_and_never_accepts_a_path(self):
+        """The desktop player runs only on explicit requests from local clients."""
+        headers = {"X-Token": "secret"}
+        from peach import routes_api
+        with patch.object(routes_api, "open_media_path", return_value=True) as launch:
+            remote = await self.client.post("/api/open-local-player?id=1", headers=headers)
+            self.assertEqual(remote.status_code, 403)
+            launch.assert_not_called()
+            with patch.object(routes_api, "_local_player_request", return_value=True):
+                opened = await self.client.post(
+                    "/api/open-local-player?id=1", headers=headers,
+                    json={"path": "C:/untrusted.exe", "command": "untrusted.exe"},
+                )
+            self.assertEqual(opened.status_code, 200)
+            self.assertEqual(opened.json(), {"ok": True})
+            launch.assert_called_once_with(self.media_file)
+
     async def test_photo_detail_reveal_resolves_the_asset_id_on_the_server(self):
         source = self._seed_photo()
         headers = {"X-Token": "secret"}

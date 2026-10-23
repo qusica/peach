@@ -13,13 +13,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import ipaddress
 import logging
 import os
 import re
 import uuid
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 from browserexport.common import BrowserexportError
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
@@ -28,7 +29,7 @@ from fastapi.responses import JSONResponse
 from . import push_discovery, web_contract, web_tasks
 from .field_owners import RevisionConflict
 from .folder_rules import FolderRuleConflict
-from .interaction import reveal_path
+from .interaction import open_media_path, reveal_path
 from .jobs import TaskRunConflict
 from .update_tasks import UpdateBusy
 from .platform import is_unmapped, translate_ledger_path
@@ -96,6 +97,53 @@ def _own_data_path(raw: str) -> Path | None:
         if target == resolved or target.is_relative_to(resolved):
             return target
     return None
+
+
+def _loopback_url(raw: str) -> bool:
+    try:
+        hostname = urlsplit(raw).hostname
+        return hostname == "localhost" or bool(hostname and ipaddress.ip_address(hostname).is_loopback)
+    except ValueError:
+        return False
+
+
+def _local_player_request(request: Request) -> bool:
+    """Never pop up a player on a remote server because someone visited its website."""
+    if request.client is None:
+        return False
+    try:
+        client_local = ipaddress.ip_address(request.client.host).is_loopback
+    except ValueError:
+        return False
+    return (client_local
+            and _loopback_url(str(request.base_url))
+            and _loopback_url(request.headers.get("origin", "")))
+
+
+@router.post("/api/open-local-player")
+def open_local_player(request: Request, id: int, args: dict[str, str] = Depends(require_auth)):
+    """Explicitly launch the server desktop's default player for an indexed video."""
+    if not _local_player_request(request):
+        raise HTTPException(403, "仅允许本机浏览器打开本机播放器")
+    asset = request.app.state.media_engine.asset(id)
+    with request.app.state.web_contract.read_connection() as connection:
+        row = connection.execute("SELECT medium FROM asset WHERE id=?", (id,)).fetchone()
+    if row is None or row["medium"] != "video":
+        raise HTTPException(415, "不是视频资产")
+    source = request.app.state.media_engine.filesystem.file_for(asset, thumbnail=False)
+    from . import strm
+    if strm.is_pointer(source):
+        raise HTTPException(415, "STRM 网络指针请使用网络播放器")
+    if not source.is_file():
+        raise HTTPException(404, "视频文件不存在")
+    try:
+        opened = open_media_path(source)
+    except OSError:
+        LOGGER.exception("cannot open local media asset %s", id)
+        raise HTTPException(503, "本机播放器启动失败")
+    if not opened:
+        raise HTTPException(501, "当前运行环境没有可用的桌面播放器")
+    return {"ok": True}
 
 
 @router.post("/api/reveal")

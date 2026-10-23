@@ -103,6 +103,30 @@ class TranscodeServiceTests(unittest.TestCase):
                     if expected:
                         self.assertEqual(result[0].read_bytes(), b"mp4")
 
+    def test_hevc_direct_playback_only_for_capable_browser(self):
+        """The client opts into native HEVC, avoiding whole-file transcoding."""
+        from peach.transcodes import _MediaProfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            source = root / "movie.mp4"
+            source.write_bytes(b"movie")
+            service = TranscodeService(
+                _Resolver(None, root / "ffprobe.exe"), root / "cache",
+                prefer_hardware=False,
+            )
+            profile = _MediaProfile("hevc", "yuv420p10le", "aac")
+            with patch.object(service, "_probe", return_value=profile):
+                self.assertTrue(service.requires_conversion(source))
+                self.assertFalse(service.requires_conversion(source, native_hevc=True))
+                self.assertEqual(
+                    service.browser_path(1, source, native_hevc=True),
+                    (source, False),
+                )
+                self.assertFalse((root / "cache").exists())
+                with self.assertRaises(TranscodeUnavailable):
+                    service.browser_path(1, source)
+
     def test_b_frames_without_composition_offsets_are_sent_to_transcode(self):
         """有 B 帧却没有 ctts 的 MP4，容器声明的显示时刻是解码顺序。
 
