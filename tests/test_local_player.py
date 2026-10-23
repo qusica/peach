@@ -1,7 +1,5 @@
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
 
 from peach.routes_api import _local_player_request, _loopback_url
 
