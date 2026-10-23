@@ -126,7 +126,9 @@ def open_local_player(request: Request, id: int, args: dict[str, str] = Depends(
     if not _local_player_request(request):
         raise HTTPException(403, "仅允许本机浏览器打开本机播放器")
     asset = request.app.state.media_engine.asset(id)
-    if asset.medium != "video":
+    with request.app.state.web_contract.read_connection() as connection:
+        row = connection.execute("SELECT medium FROM asset WHERE id=?", (id,)).fetchone()
+    if row is None or row["medium"] != "video":
         raise HTTPException(415, "不是视频资产")
     source = request.app.state.media_engine.filesystem.file_for(asset, thumbnail=False)
     from . import strm
